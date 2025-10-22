@@ -11,14 +11,14 @@ from telegram.ext import (
 )
 import json
 import os
+import time
 
 # =================== CONFIG ===================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-
 BASE_URL = "https://api.mail.tm"
 USER_DATA_FILE = "user_data.json"
 
-# =================== USER DATA STORAGE ===================
+# =================== DATA STORAGE ===================
 def load_users():
     if os.path.exists(USER_DATA_FILE):
         with open(USER_DATA_FILE, "r") as f:
@@ -30,13 +30,14 @@ def save_users(data):
         json.dump(data, f, indent=2)
 
 USERS = load_users()
+AUTO_JOBS = {}
 
-# =================== MAIL.TM API WRAPPER ===================
+# =================== MAIL.TM API ===================
 class MailTm:
     @staticmethod
     def create_account():
         import uuid
-        email = f"{uuid.uuid4().hex[:10]}@mail.tm"
+        email = f"{uuid.uuid4().hex[:10]}@tiffincrane.com"  # 👈 Custom domain (no mail.tm)
         password = uuid.uuid4().hex
         r = requests.post(f"{BASE_URL}/accounts", json={"address": email, "password": password})
         return {"address": email, "password": password}
@@ -76,12 +77,14 @@ def html_to_text(html_data):
     clean = re.compile("<.*?>")
     return re.sub(clean, "", html_data)
 
-# =================== COMMAND HANDLERS ===================
+# =================== COMMANDS ===================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     user = get_user(uid)
     if not user:
         user = MailTm.create_account()
+        user["interval"] = 5  # default 5 sec
+        user["auto"] = False
         set_user(uid, user)
 
     kb = InlineKeyboardMarkup([
@@ -141,7 +144,74 @@ async def inbox(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ])
     await update.message.reply_text(text, parse_mode="Markdown", reply_markup=kb)
 
-# =================== CALLBACK HANDLER ===================
+# =================== AUTO REFRESH ===================
+async def auto_check(context: ContextTypes.DEFAULT_TYPE):
+    job = context.job
+    uid = job.data["uid"]
+    chat_id = job.data["chat_id"]
+    user = get_user(uid)
+    if not user:
+        return
+    token = MailTm.get_token(user["address"], user["password"])
+    mails = MailTm.get_messages(token)
+    if not mails:
+        return
+    latest = mails[0]
+    last_seen = user.get("last_seen")
+    if latest["id"] != last_seen:
+        user["last_seen"] = latest["id"]
+        set_user(uid, user)
+        detail = MailTm.get_message_detail(token, latest["id"])
+        body = detail.get("text", "") or html_to_text(detail.get("html", ""))
+        msg = f"📩 *New mail received!*\n\n*From:* `{latest['from']['address']}`\n*Subject:* {latest['subject']}`\n\n{body[:1500]}"
+        await context.bot.send_message(chat_id=chat_id, text=msg, parse_mode="Markdown")
+
+async def autocheck(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    chat_id = update.effective_chat.id
+    user = get_user(uid)
+    if not user:
+        await update.message.reply_text("⚠️ Use /start first.")
+        return
+
+    if len(context.args) == 0:
+        await update.message.reply_text(f"Usage: /autocheck on|off (interval {user.get('interval', 5)}s)")
+        return
+
+    action = context.args[0].lower()
+    if action == "on":
+        job_queue = context.job_queue
+        AUTO_JOBS[uid] = job_queue.run_repeating(auto_check, interval=user.get("interval", 5), first=1, data={"uid": uid, "chat_id": chat_id})
+        user["auto"] = True
+        set_user(uid, user)
+        await update.message.reply_text("✅ Auto-check enabled.")
+    elif action == "off":
+        if uid in AUTO_JOBS:
+            AUTO_JOBS[uid].schedule_removal()
+            del AUTO_JOBS[uid]
+        user["auto"] = False
+        set_user(uid, user)
+        await update.message.reply_text("🛑 Auto-check disabled.")
+    else:
+        await update.message.reply_text("Use /autocheck on or /autocheck off")
+
+async def setinterval(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    user = get_user(uid)
+    if not user:
+        await update.message.reply_text("⚠️ Use /start first.")
+        return
+    if len(context.args) == 0:
+        await update.message.reply_text("Usage: /setinterval <seconds>")
+        return
+    sec = int(context.args[0])
+    if sec < 1:
+        sec = 1
+    user["interval"] = sec
+    set_user(uid, user)
+    await update.message.reply_text(f"⏱️ Interval set to {sec}s")
+
+# =================== CALLBACK ===================
 async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
@@ -161,10 +231,12 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # =================== MAIN ===================
 async def main():
-    print("📬 Mail Ninja is running...")
+    print("📬 Mail Ninja v2.0 is running...")
     app = ApplicationBuilder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("inbox", inbox))
+    app.add_handler(CommandHandler("autocheck", autocheck))
+    app.add_handler(CommandHandler("setinterval", setinterval))
     app.add_handler(CallbackQueryHandler(on_callback))
     await app.run_polling()
 
