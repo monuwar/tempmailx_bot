@@ -1,243 +1,150 @@
 import asyncio
-import html
-import re
-import requests
-from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
+import aiohttp
+import nest_asyncio
+import uuid
+from telegram import (
+    Update,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+)
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
     CallbackQueryHandler,
     ContextTypes,
 )
-import json
 import os
-import time
 
-# =================== CONFIG ===================
-BOT_TOKEN = os.getenv("BOT_TOKEN")
+# Apply async patch for Railway
+nest_asyncio.apply()
+
+TOKEN = os.getenv("BOT_TOKEN")
 BASE_URL = "https://api.mail.tm"
-USER_DATA_FILE = "user_data.json"
+user_data = {}
 
-# =================== DATA STORAGE ===================
-def load_users():
-    if os.path.exists(USER_DATA_FILE):
-        with open(USER_DATA_FILE, "r") as f:
-            return json.load(f)
-    return {}
+# -------- Helper functions --------
+async def create_new_mail():
+    username = f"{uuid.uuid4().hex[:10]}@tiffincrane.com"
+    password = uuid.uuid4().hex
+    async with aiohttp.ClientSession() as session:
+        await session.post(f"{BASE_URL}/accounts",
+                           json={"address": username, "password": password})
+        resp = await session.post(f"{BASE_URL}/token",
+                                  json={"address": username, "password": password})
+        data = await resp.json()
+        return username, data.get("token")
 
-def save_users(data):
-    with open(USER_DATA_FILE, "w") as f:
-        json.dump(data, f, indent=2)
-
-USERS = load_users()
-AUTO_JOBS = {}
-
-# =================== MAIL.TM API ===================
-class MailTm:
-    @staticmethod
-    def create_account():
-        import uuid
-        email = f"{uuid.uuid4().hex[:10]}@tiffincrane.com"  # 👈 Custom domain (no mail.tm)
-        password = uuid.uuid4().hex
-        r = requests.post(f"{BASE_URL}/accounts", json={"address": email, "password": password})
-        return {"address": email, "password": password}
-
-    @staticmethod
-    def get_token(email, password):
-        r = requests.post(f"{BASE_URL}/token", json={"address": email, "password": password})
-        if r.status_code == 200:
-            return r.json()["token"]
-        return None
-
-    @staticmethod
-    def get_messages(token):
+async def get_messages(token):
+    async with aiohttp.ClientSession() as session:
         headers = {"Authorization": f"Bearer {token}"}
-        r = requests.get(f"{BASE_URL}/messages", headers=headers)
-        if r.status_code == 200:
-            return r.json()["hydra:member"]
-        return []
+        async with session.get(f"{BASE_URL}/messages", headers=headers) as resp:
+            return await resp.json()
 
-    @staticmethod
-    def get_message_detail(token, msg_id):
+async def get_message_body(token, msg_id):
+    async with aiohttp.ClientSession() as session:
         headers = {"Authorization": f"Bearer {token}"}
-        r = requests.get(f"{BASE_URL}/messages/{msg_id}", headers=headers)
-        if r.status_code == 200:
-            return r.json()
-        return {}
+        async with session.get(f"{BASE_URL}/messages/{msg_id}", headers=headers) as resp:
+            return await resp.json()
 
-# =================== USER FUNCTIONS ===================
-def get_user(uid):
-    return USERS.get(str(uid))
-
-def set_user(uid, data):
-    USERS[str(uid)] = data
-    save_users(USERS)
-
-def html_to_text(html_data):
-    clean = re.compile("<.*?>")
-    return re.sub(clean, "", html_data)
-
-# =================== COMMANDS ===================
+# -------- Command handlers --------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = update.effective_user.id
-    user = get_user(uid)
-    if not user:
-        user = MailTm.create_account()
-        user["interval"] = 5  # default 5 sec
-        user["auto"] = False
-        set_user(uid, user)
+    user_id = update.effective_user.id
+    if user_id not in user_data:
+        email, token = await create_new_mail()
+        user_data[user_id] = {"email": email, "token": token}
 
-    kb = InlineKeyboardMarkup([
+    buttons = [
         [
-            InlineKeyboardButton("🆕 Generate / Switch", callback_data="switch_mail"),
-            InlineKeyboardButton("🔄 Refresh", callback_data="refresh_inbox"),
+            InlineKeyboardButton("🆕 Generate / Delete", callback_data="generate"),
+            InlineKeyboardButton("🔄 Refresh", callback_data="refresh"),
         ]
-    ])
+    ]
+    reply_markup = InlineKeyboardMarkup(buttons)
+
     await update.message.reply_text(
-        f"📧 *Current email:* `{user['address']}`\n\nUse the buttons below 👇",
+        f"👋 Welcome to *Mail Ninja* — secure temp mail inside Telegram.\n\n"
+        f"📧 Current email:\n`{user_data[user_id]['email']}`\n\n"
+        f"Use the buttons below 👇",
         parse_mode="Markdown",
-        reply_markup=kb,
+        reply_markup=reply_markup,
     )
 
-async def inbox(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = update.effective_user.id
-    user = get_user(uid)
-    if not user:
-        await update.message.reply_text("⚠️ No active email. Use /start to generate one.")
+async def generate(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    user_id = query.from_user.id
+
+    # Delete old mail
+    if user_id in user_data:
+        old_email = user_data[user_id]["email"]
+        await query.edit_message_text(f"🗑️ Old email deleted:\n`{old_email}`",
+                                      parse_mode="Markdown")
+
+    # Create new
+    email, token = await create_new_mail()
+    user_data[user_id] = {"email": email, "token": token}
+
+    buttons = [
+        [
+            InlineKeyboardButton("🆕 Generate / Delete", callback_data="generate"),
+            InlineKeyboardButton("🔄 Refresh", callback_data="refresh"),
+        ]
+    ]
+    markup = InlineKeyboardMarkup(buttons)
+    await query.message.reply_text(f"✅ New email generated:\n`{email}`",
+                                   parse_mode="Markdown",
+                                   reply_markup=markup)
+
+async def refresh(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    user_id = query.from_user.id
+    if user_id not in user_data:
+        await query.edit_message_text("⚠️ Please /start to generate a mail first.")
         return
 
-    token = MailTm.get_token(user["address"], user["password"])
-    if not token:
-        await update.message.reply_text("❌ Token error. Please /start again.")
-        return
+    token = user_data[user_id]["token"]
+    messages = await get_messages(token)
+    msg_list = messages.get("hydra:member", [])
 
-    mails = MailTm.get_messages(token)
-    if not mails:
-        kb = InlineKeyboardMarkup([
-            [
-                InlineKeyboardButton("🆕 Generate / Switch", callback_data="switch_mail"),
-                InlineKeyboardButton("🔄 Refresh", callback_data="refresh_inbox"),
-            ]
-        ])
-        await update.message.reply_text(
-            f"📬 *Current email:* `{user['address']}`\n\n_No new messages yet._",
+    if not msg_list:
+        await query.edit_message_text(
+            f"📬 Current email:\n`{user_data[user_id]['email']}`\n\nNo new messages yet.",
             parse_mode="Markdown",
-            reply_markup=kb,
+            reply_markup=InlineKeyboardMarkup(
+                [[
+                    InlineKeyboardButton("🆕 Generate / Delete", callback_data="generate"),
+                    InlineKeyboardButton("🔄 Refresh", callback_data="refresh"),
+                ]]
+            ),
         )
         return
 
-    msg_list = [f"📧 *Current email:* `{user['address']}`\n\n📩 *Inbox:*"]
-    for i, mail in enumerate(mails[:5], start=1):
-        sender = mail["from"]["address"]
-        subject = mail.get("subject", "(no subject)")
-        detail = MailTm.get_message_detail(token, mail["id"])
-        body = detail.get("text", "") or html_to_text(detail.get("html", ""))
-        preview = body[:1500] + ("..." if len(body) > 1500 else "")
-        msg_list.append(f"📨 *{i})* From: `{sender}`\n*Subject:* {subject}\n\n{preview}\n")
+    out = [f"📬 Current email:\n`{user_data[user_id]['email']}`\n\n✉️ Emails:"]
+    for i, msg in enumerate(msg_list, 1):
+        out.append(f"{i}) From: {msg['from']['address']}\nSubject: {msg['subject']}")
+    text = "\n\n".join(out)
 
-    text = "\n".join(msg_list)
-    kb = InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("🆕 Generate / Switch", callback_data="switch_mail"),
-            InlineKeyboardButton("🔄 Refresh", callback_data="refresh_inbox"),
-        ]
-    ])
-    await update.message.reply_text(text, parse_mode="Markdown", reply_markup=kb)
+    await query.edit_message_text(
+        text,
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(
+            [[
+                InlineKeyboardButton("🆕 Generate / Delete", callback_data="generate"),
+                InlineKeyboardButton("🔄 Refresh", callback_data="refresh"),
+            ]]
+        ),
+    )
 
-# =================== AUTO REFRESH ===================
-async def auto_check(context: ContextTypes.DEFAULT_TYPE):
-    job = context.job
-    uid = job.data["uid"]
-    chat_id = job.data["chat_id"]
-    user = get_user(uid)
-    if not user:
-        return
-    token = MailTm.get_token(user["address"], user["password"])
-    mails = MailTm.get_messages(token)
-    if not mails:
-        return
-    latest = mails[0]
-    last_seen = user.get("last_seen")
-    if latest["id"] != last_seen:
-        user["last_seen"] = latest["id"]
-        set_user(uid, user)
-        detail = MailTm.get_message_detail(token, latest["id"])
-        body = detail.get("text", "") or html_to_text(detail.get("html", ""))
-        msg = f"📩 *New mail received!*\n\n*From:* `{latest['from']['address']}`\n*Subject:* {latest['subject']}`\n\n{body[:1500]}"
-        await context.bot.send_message(chat_id=chat_id, text=msg, parse_mode="Markdown")
-
-async def autocheck(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = update.effective_user.id
-    chat_id = update.effective_chat.id
-    user = get_user(uid)
-    if not user:
-        await update.message.reply_text("⚠️ Use /start first.")
-        return
-
-    if len(context.args) == 0:
-        await update.message.reply_text(f"Usage: /autocheck on|off (interval {user.get('interval', 5)}s)")
-        return
-
-    action = context.args[0].lower()
-    if action == "on":
-        job_queue = context.job_queue
-        AUTO_JOBS[uid] = job_queue.run_repeating(auto_check, interval=user.get("interval", 5), first=1, data={"uid": uid, "chat_id": chat_id})
-        user["auto"] = True
-        set_user(uid, user)
-        await update.message.reply_text("✅ Auto-check enabled.")
-    elif action == "off":
-        if uid in AUTO_JOBS:
-            AUTO_JOBS[uid].schedule_removal()
-            del AUTO_JOBS[uid]
-        user["auto"] = False
-        set_user(uid, user)
-        await update.message.reply_text("🛑 Auto-check disabled.")
-    else:
-        await update.message.reply_text("Use /autocheck on or /autocheck off")
-
-async def setinterval(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = update.effective_user.id
-    user = get_user(uid)
-    if not user:
-        await update.message.reply_text("⚠️ Use /start first.")
-        return
-    if len(context.args) == 0:
-        await update.message.reply_text("Usage: /setinterval <seconds>")
-        return
-    sec = int(context.args[0])
-    if sec < 1:
-        sec = 1
-    user["interval"] = sec
-    set_user(uid, user)
-    await update.message.reply_text(f"⏱️ Interval set to {sec}s")
-
-# =================== CALLBACK ===================
-async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-    data = q.data
-    uid = q.from_user.id
-
-    if data == "refresh_inbox":
-        fake_update = Update(update.update_id, message=None)
-        fake_update.effective_user = q.from_user
-        fake_update.message = type("obj", (), {"chat_id": q.message.chat_id, "reply_text": q.message.reply_text})
-        await inbox(fake_update, context)
-
-    elif data == "switch_mail":
-        new = MailTm.create_account()
-        set_user(uid, new)
-        await q.edit_message_text(f"✅ New email generated:\n`{new['address']}`", parse_mode="Markdown")
-
-# =================== MAIN ===================
+# -------- Main --------
 async def main():
-    print("📬 Mail Ninja v2.0 is running...")
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
+    app = ApplicationBuilder().token(TOKEN).build()
+
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("inbox", inbox))
-    app.add_handler(CommandHandler("autocheck", autocheck))
-    app.add_handler(CommandHandler("setinterval", setinterval))
-    app.add_handler(CallbackQueryHandler(on_callback))
+    app.add_handler(CallbackQueryHandler(generate, pattern="generate"))
+    app.add_handler(CallbackQueryHandler(refresh, pattern="refresh"))
+
+    print("📨 Mail Ninja v2.2 PRO Final running…")
     await app.run_polling()
 
 if __name__ == "__main__":
