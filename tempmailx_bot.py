@@ -165,12 +165,15 @@ async def newinfo(update: Update, context: ContextTypes.DEFAULT_TYPE):
          InlineKeyboardButton("🆕 New Info", callback_data="newinfo")]
     ]
 
-    await query.edit_message_text(
+    # ✅ এখন নতুন ইনফো নতুন বক্সে পাঠাবে, আগেরটা রিপ্লেস করবে না
+    await query.message.reply_text(
         text=text,
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
+    # নতুন বক্সের ইনবক্স অটো-রিফ্রেশও শুরু করবে
+    context.job_queue.run_repeating(auto_refresh, REFRESH_INTERVAL, context=(query.message.chat_id, token))
 
 async def viewhtml(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
