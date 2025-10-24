@@ -137,8 +137,42 @@ async def inbox(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def newinfo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    await newmail(update, context)
 
+    name = random_name()
+    email, password, token = await create_mail_account()
+
+    context.user_data.update({
+        "name": name,
+        "email": email,
+        "password": password,
+        "token": token,
+        "html": None,
+        "last_id": None
+    })
+
+    text = (
+        "📬 *Mail Ninja — Temp Inbox Ready!*\n\n"
+        "👤 *Profile*\n"
+        f"🧾 *Name:* {name}\n"
+        f"✉️ *Email:* {email}\n"
+        f"🔐 *Password:* {password}\n\n"
+        "🟢 *Status:* Active\n"
+        f"⏱️ *Auto-Refresh:* Every {REFRESH_INTERVAL} seconds"
+    )
+
+    keyboard = [
+        [
+            InlineKeyboardButton("📥 Inbox", callback_data="inbox"),
+            InlineKeyboardButton("🆕 New Info", callback_data="newinfo")
+        ]
+    ]
+
+    # আগের মেসেজে টেক্সট এবং বাটন একসাথে আপডেট করা হচ্ছে
+    await query.edit_message_text(
+        text=text,
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
 
 async def viewhtml(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
