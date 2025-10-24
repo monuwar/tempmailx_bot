@@ -3,13 +3,13 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes
 import nest_asyncio
 
-# ========== CONFIG ==========
+# ================= CONFIG =================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 API_BASE = "https://api.mail.tm"
 REFRESH_INTERVAL = 2  # seconds
 
 
-# ========== UTILITIES ==========
+# ================= UTILITIES =================
 def random_password(length=8):
     return ''.join(random.choices(string.ascii_letters + string.digits, k=length))
 
@@ -18,35 +18,55 @@ def random_name():
     last_names = ["Davis", "Brooks", "Allen", "Foster", "Green", "Hill", "Carter"]
     return f"{random.choice(first_names)} {random.choice(last_names)}"
 
-async def fetch_mailbox():
+async def create_mail_account():
+    # Register a new temporary email
+    domain_resp = requests.get(f"{API_BASE}/domains")
+    domain = domain_resp.json()["hydra:member"][0]["domain"]
+    local_part = ''.join(random.choices(string.ascii_lowercase + string.digits, k=8))
+    email = f"{local_part}@{domain}"
+    password = random_password()
+
+    register_data = {"address": email, "password": password}
+    requests.post(f"{API_BASE}/accounts", json=register_data)
+
+    token_resp = requests.post(f"{API_BASE}/token", json=register_data)
+    token = token_resp.json().get("token")
+    return email, password, token
+
+
+async def get_inbox(token):
+    headers = {"Authorization": f"Bearer {token}"}
     try:
-        r = requests.get(f"{API_BASE}/messages")
+        r = requests.get(f"{API_BASE}/messages", headers=headers)
         if r.status_code == 200:
-            data = r.json()
-            return data.get("hydra:member", [])
+            data = r.json().get("hydra:member", [])
+            return data
     except Exception as e:
-        print("Mail fetch error:", e)
+        print("Inbox fetch error:", e)
     return []
 
 
-# ========== HANDLERS ==========
+# ================= HANDLERS =================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "👋 Welcome to *Mail Ninja Pro v4.5 — Live Refresh + Smart UI Edition!*\n\n"
+        "👋 Welcome to *Mail Ninja Pro v4.6 — Smart Auto-Refresh Edition!*\n\n"
         "Use /newmail to generate your temporary inbox.",
         parse_mode="Markdown"
     )
 
+
 async def newmail(update: Update, context: ContextTypes.DEFAULT_TYPE):
     name = random_name()
-    email = f"{''.join(random.choices(string.ascii_lowercase + string.digits, k=8))}@tiffincrane.com"
-    password = random_password()
+    email, password, token = await create_mail_account()
 
-    context.user_data["name"] = name
-    context.user_data["email"] = email
-    context.user_data["password"] = password
-    context.user_data["html"] = None
-    context.user_data["last_msg_id"] = None
+    context.user_data.update({
+        "name": name,
+        "email": email,
+        "password": password,
+        "token": token,
+        "html": None,
+        "last_id": None
+    })
 
     text = (
         "📬 *Mail Ninja — Temp Inbox Ready!*\n\n"
@@ -70,21 +90,29 @@ async def newmail(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
+    context.user_data["main_msg_id"] = msg.message_id
 
-    context.user_data["main_msg"] = msg
-    context.job_queue.run_repeating(auto_refresh, REFRESH_INTERVAL, context=update.message.chat_id)
+    # start auto-refresh job
+    context.job_queue.run_repeating(auto_refresh, REFRESH_INTERVAL, context=(update.message.chat_id, token))
 
 
 async def inbox(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
-    mails = await fetch_mailbox()
+    token = context.user_data.get("token")
+    mails = await get_inbox(token)
+
     if not mails:
-        await query.edit_message_text(
-            text=query.message.text_markdown + "\n\n📭 *Inbox is empty.*",
-            parse_mode="Markdown"
+        await query.edit_message_reply_markup(
+            InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("📥 Inbox", callback_data="inbox"),
+                    InlineKeyboardButton("🆕 New Info", callback_data="newinfo")
+                ]
+            ])
         )
+        await query.message.reply_text("📭 Inbox is empty.")
         return
 
     mail = mails[0]
@@ -98,8 +126,14 @@ async def inbox(update: Update, context: ContextTypes.DEFAULT_TYPE):
     link_text = f"\n\n🔗 [Link]({links[0]})" if links else ""
 
     updated_text = (
-        query.message.text_markdown +
-        f"\n\n📨 *New Mail!*\n\n"
+        "📬 *Mail Ninja — Temp Inbox Ready!*\n\n"
+        "👤 *Profile*\n"
+        f"🧾 *Name:* {context.user_data['name']}\n"
+        f"✉️ *Email:* {context.user_data['email']}\n"
+        f"🔐 *Password:* {context.user_data['password']}\n\n"
+        "🟢 *Status:* Active\n"
+        f"⏱️ *Auto-Refresh:* Every {REFRESH_INTERVAL} seconds\n\n"
+        "📨 *New Mail!*\n"
         f"📬 From: {sender}\n"
         f"📨 Subject: {subject}\n"
         f"💬 Preview: {preview}{link_text}"
@@ -108,7 +142,7 @@ async def inbox(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
         [
             InlineKeyboardButton("📥 Inbox", callback_data="inbox"),
-            InlineKeyboardButton("🆕 New Info", callback_data="newinfo"),
+            InlineKeyboardButton("🆕 New Info", callback_data="newinfo")
         ],
         [InlineKeyboardButton("📄 View HTML", callback_data="viewhtml")]
     ]
@@ -125,12 +159,16 @@ async def newinfo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
 
     name = random_name()
-    email = f"{''.join(random.choices(string.ascii_lowercase + string.digits, k=8))}@tiffincrane.com"
-    password = random_password()
+    email, password, token = await create_mail_account()
 
-    context.user_data["name"] = name
-    context.user_data["email"] = email
-    context.user_data["password"] = password
+    context.user_data.update({
+        "name": name,
+        "email": email,
+        "password": password,
+        "token": token,
+        "html": None,
+        "last_id": None
+    })
 
     text = (
         "📬 *Mail Ninja — Temp Inbox Ready!*\n\n"
@@ -161,19 +199,24 @@ async def viewhtml(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
 
     html_content = context.user_data.get("html", "No HTML content found.")
-    await query.message.reply_text(html_content[:4000])
+    await query.message.reply_text(html_content[:4000], disable_web_page_preview=False)
 
 
 async def auto_refresh(context: ContextTypes.DEFAULT_TYPE):
-    chat_id = context.job.context
-    mails = await fetch_mailbox()
+    chat_id, token = context.job.context
+    mails = await get_inbox(token)
     if mails:
         mail = mails[0]
+        mail_id = mail["id"]
+        if context.chat_data.get("last_id") == mail_id:
+            return
+        context.chat_data["last_id"] = mail_id
+
         sender = mail.get("from", {}).get("address", "Unknown")
         subject = mail.get("subject", "No subject")
         preview = mail.get("intro", "No preview")
-
-        links = re.findall(r'https?://[^\s]+', mail.get("html", [""])[0])
+        html = mail.get("html", [""])[0] if mail.get("html") else ""
+        links = re.findall(r'https?://[^\s]+', html)
         link_text = f"\n\n🔗 [Link]({links[0]})" if links else ""
 
         await context.bot.send_message(
@@ -186,18 +229,18 @@ async def auto_refresh(context: ContextTypes.DEFAULT_TYPE):
         )
 
 
-# ========== MAIN ==========
+# ================= MAIN =================
 async def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
-
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("newmail", newmail))
     app.add_handler(CallbackQueryHandler(inbox, pattern="inbox"))
     app.add_handler(CallbackQueryHandler(newinfo, pattern="newinfo"))
     app.add_handler(CallbackQueryHandler(viewhtml, pattern="viewhtml"))
 
-    print("📬 Mail Ninja Pro v4.5 — Live Refresh + Smart UI Edition Running...")
+    print("📬 Mail Ninja Pro v4.6 — Smart Auto-Refresh Edition Running...")
     await app.run_polling()
+
 
 if __name__ == "__main__":
     nest_asyncio.apply()
