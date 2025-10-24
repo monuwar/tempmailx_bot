@@ -173,45 +173,6 @@ async def newinfo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     # নতুন বক্সের ইনবক্স অটো-রিফ্রেশও শুরু করবে
-    context.job_queue.run_repeating(auto_refresh, REFRESH_INTERVAL, context=(query.message.chat_id, token))async def newinfo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-
-    name = random_name()
-    email, password, token = await create_mail_account()
-
-    context.user_data.update({
-        "name": name,
-        "email": email,
-        "password": password,
-        "token": token,
-        "html": None,
-        "last_id": None
-    })
-
-    text = (
-        "📬 *Mail Ninja — Temp Inbox Ready!*\n\n"
-        "👤 *Profile*\n"
-        f"🧾 *Name:* {name}\n"
-        f"✉️ *Email:* {email}\n"
-        f"🔐 *Password:* {password}\n\n"
-        "🟢 *Status:* Active\n"
-        f"⏱️ *Auto-Refresh:* Every {REFRESH_INTERVAL} seconds"
-    )
-
-    keyboard = [
-        [InlineKeyboardButton("📥 Inbox", callback_data="inbox"),
-         InlineKeyboardButton("🆕 New Info", callback_data="newinfo")]
-    ]
-
-    # ✅ এখন নতুন ইনফো নতুন বক্সে পাঠাবে, আগেরটা রিপ্লেস করবে না
-    await query.message.reply_text(
-        text=text,
-        parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
-
-    # নতুন বক্সের ইনবক্স অটো-রিফ্রেশও শুরু করবে
     context.job_queue.run_repeating(auto_refresh, REFRESH_INTERVAL, context=(query.message.chat_id, token))
 
 
