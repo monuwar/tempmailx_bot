@@ -43,7 +43,7 @@ async def get_inbox(token):
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "👋 Welcome to *Mail Ninja Pro v4.8 — Smart Popup Build!*\n\n"
+        "⚡ Welcome to *Mail Ninja Pro!*\n\n"
         "Use /newmail to generate your temporary inbox.",
         parse_mode="Markdown"
     )
