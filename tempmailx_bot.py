@@ -69,7 +69,6 @@ async def newmail(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"✉️ *Email:* {email}\n"
         f"🔐 *Password:* {password}\n\n"
         "🟢 *Status:* Active\n"
-        f"⏱️ *Auto-Refresh:* Every {REFRESH_INTERVAL} seconds"
     )
 
     keyboard = [
