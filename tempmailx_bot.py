@@ -51,7 +51,7 @@ async def newmail(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["token"] = token
 
     msg = (
-        "```pgsql\n"
+        "```congrats\n"
         "👤 USER INFO\n"
         f"Name     — {name}\n"
         f"Email    — {email}\n"
