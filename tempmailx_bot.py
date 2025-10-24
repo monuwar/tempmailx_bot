@@ -1,79 +1,121 @@
+import os
 import random
 import string
 import requests
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ContextTypes
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 
-MAIL_API = "https://api.mail.tm"
+API_BASE = "https://api.mail.tm"
+BOT_TOKEN = os.getenv("BOT_TOKEN")
 
-USER_DATA = {}
-
-# Generate random password (letters + digits only)
-def generate_password(length=9):
-    characters = string.ascii_letters + string.digits
-    return ''.join(random.choice(characters) for _ in range(length))
-
-# Generate random realistic name
-def generate_name():
-    first_names = [
-        "John", "Alex", "Emma", "Sophia", "James", "Olivia",
-        "Liam", "Ava", "Ethan", "Mia", "Noah", "Grace",
-        "Lucas", "Ella", "Mason", "Lily", "Henry", "Zoe"
-    ]
-    last_names = [
-        "Doe", "Smith", "Brown", "Taylor", "Wilson",
-        "Anderson", "Thomas", "Clark", "Harris", "Lewis",
-        "Walker", "Young", "King", "Scott", "Hall"
-    ]
+# ========== Utility Functions ==========
+def generate_random_name():
+    first_names = ["John", "Jane", "Alex", "Sam", "Chris", "Taylor", "Jordan", "Casey", "Robin", "Pat"]
+    last_names = ["Doe", "Smith", "Johnson", "Brown", "Davis", "Miller", "Wilson", "Moore", "Taylor", "Anderson"]
     return f"{random.choice(first_names)} {random.choice(last_names)}"
 
-# /newmail command
-async def newmail(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = str(update.effective_user.id)
+def generate_password(length=10):
+    chars = string.ascii_letters + string.digits
+    return ''.join(random.choice(chars) for _ in range(length))
 
-    # Generate new random name and password
-    name = generate_name()
+# ========== Mail.tm Integration ==========
+def create_account():
+    name = generate_random_name()
     password = generate_password()
+    username = ''.join(random.choices(string.ascii_lowercase + string.digits, k=8))
+    email = f"{username}@tiffincrane.com"
 
-    # Create a new mail.tm account
-    account_res = requests.post(f"{MAIL_API}/accounts", json={
-        "address": "",
-        "password": password
-    })
+    session = requests.Session()
+    data = {"address": email, "password": password}
+    session.post(f"{API_BASE}/accounts", json=data)
 
-    account = account_res.json()
+    token_req = session.post(f"{API_BASE}/token", json=data)
+    token = token_req.json().get("token")
 
-    if "address" not in account:
-        await update.message.reply_text("⚠️ Failed to generate a new email. Please try again.")
-        return
+    return name, email, password, token
 
-    email_address = account["address"]
+def fetch_inbox(token):
+    headers = {"Authorization": f"Bearer {token}"}
+    response = requests.get(f"{API_BASE}/messages", headers=headers)
+    return response.json().get("hydra:member", [])
 
-    # Save user data
-    USER_DATA[user_id] = {
-        "name": name,
-        "email": email_address,
-        "password": password
-    }
+def fetch_message(token, message_id):
+    headers = {"Authorization": f"Bearer {token}"}
+    response = requests.get(f"{API_BASE}/messages/{message_id}", headers=headers)
+    return response.json()
 
-    # Stylish info block (monospace with copy option)
-    info_block = (
-        "```\n"
-        "────────────────────────\n"
-        f"Name: {name}\n"
-        f"Email: {email_address}\n"
-        f"Password: {password}\n"
-        "────────────────────────\n"
+# ========== Telegram Commands ==========
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "👋 Welcome to Mail Ninja!\n\n"
+        "📨 Use /newmail to generate a fresh temporary email.\n"
+        "💾 Messages will appear here automatically."
+    )
+
+async def newmail(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    name, email, password, token = create_account()
+    context.user_data["token"] = token
+
+    msg = (
+        "```pgsql\n"
+        "👤 USER INFO\n"
+        f"Name     — {name}\n"
+        f"Email    — {email}\n"
+        f"Password — {password}\n"
         "```"
     )
 
-    buttons = [
-        [InlineKeyboardButton("📥 View Inbox", callback_data="inbox")],
-        [InlineKeyboardButton("🆕 Generate / Delete", callback_data="generate")]
+    keyboard = [
+        [InlineKeyboardButton("📥 View Inbox", callback_data="inbox"),
+         InlineKeyboardButton("🆕 Generate / Delete", callback_data="newmail")]
     ]
 
     await update.message.reply_text(
-        f"✅ *Your new temporary email has been generated!*\n\n{info_block}",
-        parse_mode="MarkdownV2",
-        reply_markup=InlineKeyboardMarkup(buttons)
+        msg, parse_mode="MarkdownV2", reply_markup=InlineKeyboardMarkup(keyboard)
     )
+
+async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    if query.data == "newmail":
+        await newmail(update, context)
+
+    elif query.data == "inbox":
+        token = context.user_data.get("token")
+        if not token:
+            await query.message.reply_text("⚠️ Please create a new email first using /newmail")
+            return
+
+        inbox = fetch_inbox(token)
+        if not inbox:
+            await query.message.reply_text("📭 Inbox is empty. Try again later.")
+            return
+
+        text = "📩 **Inbox Messages:**\n\n"
+        for i, mail in enumerate(inbox[:5], start=1):
+            subject = mail.get("subject", "No Subject")
+            sender = mail.get("from", {}).get("address", "Unknown")
+            msg_id = mail.get("id")
+            text += f"{i}. ✉️ *{subject}*\n   From: `{sender}`\n\n"
+
+        keyboard = [
+            [InlineKeyboardButton("🔄 Refresh", callback_data="inbox"),
+             InlineKeyboardButton("📤 Back", callback_data="newmail")]
+        ]
+
+        await query.message.reply_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
+
+# ========== Main Bot Runner ==========
+def main():
+    app = Application.builder().token(BOT_TOKEN).build()
+
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("newmail", newmail))
+    app.add_handler(CallbackQueryHandler(button_handler))
+
+    print("📬 Mail Ninja v3.6 — Full Mail View Edition Running...")
+    app.run_polling(allowed_updates=Update.ALL_TYPES)
+
+if __name__ == "__main__":
+    main()
