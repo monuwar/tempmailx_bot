@@ -39,11 +39,6 @@ def fetch_inbox(token):
     response = requests.get(f"{API_BASE}/messages", headers=headers)
     return response.json().get("hydra:member", [])
 
-def fetch_message(token, message_id):
-    headers = {"Authorization": f"Bearer {token}"}
-    response = requests.get(f"{API_BASE}/messages/{message_id}", headers=headers)
-    return response.json()
-
 # ========== Telegram Commands ==========
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
@@ -96,7 +91,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for i, mail in enumerate(inbox[:5], start=1):
             subject = mail.get("subject", "No Subject")
             sender = mail.get("from", {}).get("address", "Unknown")
-            msg_id = mail.get("id")
             text += f"{i}. ✉️ *{subject}*\n   From: `{sender}`\n\n"
 
         keyboard = [
@@ -106,16 +100,22 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         await query.message.reply_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
 
-# ========== Main Bot Runner ==========
-def main():
+# ========== Main Bot Runner (Railway Safe Async Loop) ==========
+import asyncio
+
+async def main():
     app = Application.builder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("newmail", newmail))
     app.add_handler(CallbackQueryHandler(button_handler))
 
-    print("📬 Mail Ninja v3.6 — Full Mail View Edition Running...")
-    app.run_polling(allowed_updates=Update.ALL_TYPES)
+    print("📬 Mail Ninja v3.6 — Stable Railway Edition Running...")
+    await app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
-    main()
+    try:
+        asyncio.run(main())
+    except RuntimeError:
+        loop = asyncio.get_event_loop()
+        loop.run_until_complete(main())
