@@ -1,8 +1,7 @@
 import os, asyncio, random, string, re, requests
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes
-import nest_asyncio
-import time
+import nest_asyncio, time
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 API_BASE = "https://api.mail.tm"
@@ -13,9 +12,9 @@ def random_password(length=8):
     return ''.join(random.choices(string.ascii_letters + string.digits, k=length))
 
 def random_name():
-    first_names = ["Olivia", "Mason", "Ava", "Liam", "Ella", "Noah", "Isla", "Blake", "Sophia"]
-    last_names = ["Davis", "Brooks", "Allen", "Foster", "Green", "Hill", "Carter"]
-    return f"{random.choice(first_names)} {random.choice(last_names)}"
+    first = ["Olivia", "Mason", "Ava", "Liam", "Ella", "Noah", "Isla", "Blake", "Sophia"]
+    last = ["Davis", "Brooks", "Allen", "Foster", "Green", "Hill", "Carter"]
+    return f"{random.choice(first)} {random.choice(last)}"
 
 
 async def create_mail_account():
@@ -25,7 +24,7 @@ async def create_mail_account():
     email = f"{local}@{domain}"
     password = random_password()
     requests.post(f"{API_BASE}/accounts", json={"address": email, "password": password})
-    time.sleep(2)  # allow server to sync
+    time.sleep(2)  # let mail.tm register
     token_resp = requests.post(f"{API_BASE}/token", json={"address": email, "password": password})
     token = token_resp.json().get("token")
     return email, password, token
@@ -44,7 +43,7 @@ async def get_inbox(token):
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "👋 Welcome to *Mail Ninja Pro v4.7 — Stable Refresh Build!*\n\n"
+        "👋 Welcome to *Mail Ninja Pro v4.8 — Smart Popup Build!*\n\n"
         "Use /newmail to generate your temporary inbox.",
         parse_mode="Markdown"
     )
@@ -93,8 +92,9 @@ async def inbox(update: Update, context: ContextTypes.DEFAULT_TYPE):
     token = context.user_data.get("token")
     mails = await get_inbox(token)
 
+    # ✅ popup instead of “Inbox is empty” message
     if not mails:
-        await query.message.reply_text("📭 Inbox is empty.")
+        await query.answer("📭 No new mail found!", show_alert=True)
         return
 
     mail = mails[0]
@@ -161,18 +161,16 @@ async def newinfo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     keyboard = [
-        [
-            InlineKeyboardButton("📥 Inbox", callback_data="inbox"),
-            InlineKeyboardButton("🆕 New Info", callback_data="newinfo")
-        ]
+        [InlineKeyboardButton("📥 Inbox", callback_data="inbox"),
+         InlineKeyboardButton("🆕 New Info", callback_data="newinfo")]
     ]
 
-    # আগের মেসেজে টেক্সট এবং বাটন একসাথে আপডেট করা হচ্ছে
     await query.edit_message_text(
         text=text,
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
+
 
 async def viewhtml(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -213,12 +211,10 @@ async def main():
     app.add_handler(CallbackQueryHandler(inbox, pattern="inbox"))
     app.add_handler(CallbackQueryHandler(newinfo, pattern="newinfo"))
     app.add_handler(CallbackQueryHandler(viewhtml, pattern="viewhtml"))
-
-    print("📬 Mail Ninja Pro v4.7 — Stable Refresh Build Running...")
+    print("📬 Mail Ninja Pro v4.8 — Smart Popup Build Running...")
     await app.run_polling()
 
 
 if __name__ == "__main__":
     nest_asyncio.apply()
-    loop = asyncio.get_event_loop()
-    loop.run_until_complete(main())
+    asyncio.run(main())
