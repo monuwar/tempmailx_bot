@@ -1,7 +1,8 @@
-import os
+  import os
 import random
 import string
 import requests
+import asyncio
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 
@@ -28,7 +29,6 @@ def create_account():
     session = requests.Session()
     data = {"address": email, "password": password}
     session.post(f"{API_BASE}/accounts", json=data)
-
     token_req = session.post(f"{API_BASE}/token", json=data)
     token = token_req.json().get("token")
 
@@ -75,8 +75,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if query.data == "newmail":
         await newmail(update, context)
+        return
 
-    elif query.data == "inbox":
+    if query.data == "inbox":
         token = context.user_data.get("token")
         if not token:
             await query.message.reply_text("⚠️ Please create a new email first using /newmail")
@@ -97,25 +98,24 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("🔄 Refresh", callback_data="inbox"),
              InlineKeyboardButton("📤 Back", callback_data="newmail")]
         ]
-
         await query.message.reply_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
 
-# ========== Main Bot Runner (Railway Safe Async Loop) ==========
-import asyncio
-
-async def main():
+# ========== Main Runner (Async Safe for Railway) ==========
+async def run_bot():
     app = Application.builder().token(BOT_TOKEN).build()
-
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("newmail", newmail))
     app.add_handler(CallbackQueryHandler(button_handler))
 
-    print("📬 Mail Ninja v3.6 — Stable Railway Edition Running...")
-    await app.run_polling(allowed_updates=Update.ALL_TYPES)
+    print("📬 Mail Ninja v3.7 — Stable Railway Version Running...")
+    await app.initialize()
+    await app.start()
+    await app.updater.start_polling()
+    await asyncio.Event().wait()
 
 if __name__ == "__main__":
     try:
-        asyncio.run(main())
+        asyncio.run(run_bot())
     except RuntimeError:
         loop = asyncio.get_event_loop()
-        loop.run_until_complete(main())
+        loop.run_until_complete(run_bot())
