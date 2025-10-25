@@ -66,7 +66,7 @@ async def newmail(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "📬 *Mail Ninja — Temp Inbox Ready!*\n\n"
         "👤 *Profile*\n"
         f"🧾 *Name:* {name}\n"
-        f"✉️ *Email:* {email}\n"
+        f"📬 *Email:* {email}\n"
         f"🔐 *Password:* {password}\n\n"
         "🟢 *Status:* Active\n"
         f"⏱️ *Auto-Refresh:* Every {REFRESH_INTERVAL} seconds"
